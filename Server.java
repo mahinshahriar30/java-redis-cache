@@ -11,34 +11,28 @@ import java.util.concurrent.TimeUnit;
 
 public class Server {
     private static final int PORT = 6379;
-    
+
     // Key-Value Store (RAM)
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-    
     // Expiration Store (Maps Key -> Expiration Timestamp in milliseconds)
     private static final ConcurrentHashMap<String, Long> expiryStore = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        System.out.println("🚀 Starting Java Redis Server on port " + PORT + "...");
-
-        // Start background thread for Active Eviction (sweeps expired keys every 1 second)
+        System.out.println("Starting Java Redis Server on port " + PORT + "...");
         startActiveEviction();
 
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            System.out.println("✅ Server ready! Waiting for client connections...");
-
+            System.out.println("Server ready! Waiting for client connections...");
             while (true) {
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("⚡ New client connected: " + clientSocket.getInetAddress());
-
+                System.out.println("New client connected: " + clientSocket.getInetAddress());
                 new Thread(() -> handleClient(clientSocket)).start();
             }
         } catch (IOException e) {
-            System.err.println("❌ Server error: " + e.getMessage());
+            System.err.println("Server error: " + e.getMessage());
         }
     }
 
-    // Background task to automatically sweep expired keys from memory
     private static void startActiveEviction() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
@@ -48,7 +42,7 @@ public class Server {
                 if (expireAt != null && now > expireAt) {
                     store.remove(key);
                     expiryStore.remove(key);
-                    System.out.println("🧹 Active Eviction: Automatically cleaned up expired key -> " + key);
+                    System.out.println("Active Eviction: Automatically cleaned up expired key -> " + key);
                 }
             }
         }, 1, 1, TimeUnit.SECONDS);
@@ -62,7 +56,6 @@ public class Server {
             String inputLine;
             while ((inputLine = reader.readLine()) != null) {
                 System.out.println("Received: " + inputLine);
-
                 String[] parts = inputLine.trim().split("\\s+");
                 String command = parts[0].toUpperCase();
 
@@ -98,8 +91,6 @@ public class Server {
                     case "GET":
                         if (parts.length >= 2) {
                             String key = parts[1];
-                            
-                            // Passive Eviction check
                             if (isExpired(key)) {
                                 store.remove(key);
                                 expiryStore.remove(key);
@@ -110,6 +101,32 @@ public class Server {
                             }
                         } else {
                             writer.println("-ERR wrong number of arguments for 'GET'");
+                        }
+                        break;
+
+                    case "EXISTS":
+                        if (parts.length >= 2) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                store.remove(key);
+                                expiryStore.remove(key);
+                                writer.println(":0");
+                            } else {
+                                writer.println(store.containsKey(key) ? ":1" : ":0");
+                            }
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'EXISTS'");
+                        }
+                        break;
+
+                    case "DEL":
+                        if (parts.length >= 2) {
+                            String key = parts[1];
+                            expiryStore.remove(key);
+                            String removedValue = store.remove(key);
+                            writer.println(removedValue != null ? ":1" : ":0");
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'DEL'");
                         }
                         break;
 
