@@ -5,15 +5,24 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class Server {
     private static final int PORT = 6379;
     
-    // In-memory key-value database (Thread-safe)
+    // Key-Value Store (RAM)
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+    
+    // Expiration Store (Maps Key -> Expiration Timestamp in milliseconds)
+    private static final ConcurrentHashMap<String, Long> expiryStore = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         System.out.println("🚀 Starting Java Redis Server on port " + PORT + "...");
+
+        // Start background thread for Active Eviction (sweeps expired keys every 1 second)
+        startActiveEviction();
 
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("✅ Server ready! Waiting for client connections...");
@@ -22,12 +31,27 @@ public class Server {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("⚡ New client connected: " + clientSocket.getInetAddress());
 
-                // Run each client on a separate thread so multiple users can connect at once
                 new Thread(() -> handleClient(clientSocket)).start();
             }
         } catch (IOException e) {
             System.err.println("❌ Server error: " + e.getMessage());
         }
+    }
+
+    // Background task to automatically sweep expired keys from memory
+    private static void startActiveEviction() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            long now = System.currentTimeMillis();
+            for (String key : expiryStore.keySet()) {
+                Long expireAt = expiryStore.get(key);
+                if (expireAt != null && now > expireAt) {
+                    store.remove(key);
+                    expiryStore.remove(key);
+                    System.out.println("🧹 Active Eviction: Automatically cleaned up expired key -> " + key);
+                }
+            }
+        }, 1, 1, TimeUnit.SECONDS);
     }
 
     private static void handleClient(Socket clientSocket) {
@@ -39,7 +63,6 @@ public class Server {
             while ((inputLine = reader.readLine()) != null) {
                 System.out.println("Received: " + inputLine);
 
-                // Split input into words: e.g., "SET user Mahin" -> ["SET", "user", "Mahin"]
                 String[] parts = inputLine.trim().split("\\s+");
                 String command = parts[0].toUpperCase();
 
@@ -50,7 +73,22 @@ public class Server {
 
                     case "SET":
                         if (parts.length >= 3) {
-                            store.put(parts[1], parts[2]); // Save key and value to RAM
+                            String key = parts[1];
+                            String value = parts[2];
+                            store.put(key, value);
+
+                            if (parts.length >= 5 && parts[3].equalsIgnoreCase("EX")) {
+                                try {
+                                    long seconds = Long.parseLong(parts[4]);
+                                    long expireAt = System.currentTimeMillis() + (seconds * 1000);
+                                    expiryStore.put(key, expireAt);
+                                } catch (NumberFormatException e) {
+                                    writer.println("-ERR value is not an integer or out of range");
+                                    break;
+                                }
+                            } else {
+                                expiryStore.remove(key);
+                            }
                             writer.println("+OK");
                         } else {
                             writer.println("-ERR wrong number of arguments for 'SET'");
@@ -59,11 +97,16 @@ public class Server {
 
                     case "GET":
                         if (parts.length >= 2) {
-                            String value = store.get(parts[1]); // Look up key
-                            if (value != null) {
-                                writer.println(value);
+                            String key = parts[1];
+                            
+                            // Passive Eviction check
+                            if (isExpired(key)) {
+                                store.remove(key);
+                                expiryStore.remove(key);
+                                writer.println("(nil)");
                             } else {
-                                writer.println("(nil)"); // Key not found
+                                String value = store.get(key);
+                                writer.println(value != null ? value : "(nil)");
                             }
                         } else {
                             writer.println("-ERR wrong number of arguments for 'GET'");
@@ -78,5 +121,13 @@ public class Server {
         } catch (IOException e) {
             System.out.println("Client disconnected.");
         }
+    }
+
+    private static boolean isExpired(String key) {
+        Long expireAt = expiryStore.get(key);
+        if (expireAt == null) {
+            return false;
+        }
+        return System.currentTimeMillis() > expireAt;
     }
 }
