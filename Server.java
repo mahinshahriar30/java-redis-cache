@@ -106,14 +106,18 @@ public class Server {
 
                     case "EXISTS":
                         if (parts.length >= 2) {
-                            String key = parts[1];
-                            if (isExpired(key)) {
-                                store.remove(key);
-                                expiryStore.remove(key);
-                                writer.println(":0");
-                            } else {
-                                writer.println(store.containsKey(key) ? ":1" : ":0");
+                            int count = 0;
+                            // Loop through all keys provided in the command
+                            for (int i = 1; i < parts.length; i++) {
+                                String key = parts[i];
+                                if (isExpired(key)) {
+                                    store.remove(key);
+                                    expiryStore.remove(key);
+                                } else if (store.containsKey(key)) {
+                                    count++;
+                                }
                             }
+                            writer.println(":" + count);
                         } else {
                             writer.println("-ERR wrong number of arguments for 'EXISTS'");
                         }
@@ -121,10 +125,16 @@ public class Server {
 
                     case "DEL":
                         if (parts.length >= 2) {
-                            String key = parts[1];
-                            expiryStore.remove(key);
-                            String removedValue = store.remove(key);
-                            writer.println(removedValue != null ? ":1" : ":0");
+                            int deletedCount = 0;
+                            // Loop through all keys provided and delete each one
+                            for (int i = 1; i < parts.length; i++) {
+                                String key = parts[i];
+                                expiryStore.remove(key);
+                                if (store.remove(key) != null) {
+                                    deletedCount++;
+                                }
+                            }
+                            writer.println(":" + deletedCount);
                         } else {
                             writer.println("-ERR wrong number of arguments for 'DEL'");
                         }
