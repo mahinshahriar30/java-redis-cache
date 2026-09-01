@@ -1,4 +1,3 @@
-```markdown
 <div align="center">
   <h1>Java Redis Server</h1>
   <p><strong>Custom Concurrent In-Memory Redis Server Built from Scratch in Java</strong></p>
