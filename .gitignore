@@ -1,0 +1,10 @@
+# Compiled Java output
+*.class
+
+# Persistent AOF database file
+database.aof
+
+# IDE specific files
+.vscode/
+.idea/
+*.iml
