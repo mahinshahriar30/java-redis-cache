@@ -6,6 +6,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -18,6 +19,8 @@ public class Server {
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     // Key-Value Store for Lists
     private static final ConcurrentHashMap<String, Deque<String>> listStore = new ConcurrentHashMap<>();
+    // Key-Value Store for Hashes (Key -> Map of Fields and Values)
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> hashStore = new ConcurrentHashMap<>();
     // Expiration Store
     private static final ConcurrentHashMap<String, Long> expiryStore = new ConcurrentHashMap<>();
 
@@ -46,6 +49,7 @@ public class Server {
                 if (expireAt != null && now > expireAt) {
                     store.remove(key);
                     listStore.remove(key);
+                    hashStore.remove(key);
                     expiryStore.remove(key);
                     System.out.println("Active Eviction: Automatically cleaned up expired key -> " + key);
                 }
@@ -74,6 +78,7 @@ public class Server {
                             String key = parts[1];
                             String value = parts[2];
                             listStore.remove(key);
+                            hashStore.remove(key);
                             store.put(key, value);
 
                             if (parts.length >= 5 && parts[3].equalsIgnoreCase("EX")) {
@@ -100,6 +105,7 @@ public class Server {
                             if (isExpired(key)) {
                                 store.remove(key);
                                 listStore.remove(key);
+                                hashStore.remove(key);
                                 expiryStore.remove(key);
                                 writer.println("(nil)");
                             } else {
@@ -119,8 +125,9 @@ public class Server {
                                 if (isExpired(key)) {
                                     store.remove(key);
                                     listStore.remove(key);
+                                    hashStore.remove(key);
                                     expiryStore.remove(key);
-                                } else if (store.containsKey(key) || listStore.containsKey(key)) {
+                                } else if (store.containsKey(key) || listStore.containsKey(key) || hashStore.containsKey(key)) {
                                     count++;
                                 }
                             }
@@ -138,7 +145,8 @@ public class Server {
                                 expiryStore.remove(key);
                                 boolean removedStr = store.remove(key) != null;
                                 boolean removedList = listStore.remove(key) != null;
-                                if (removedStr || removedList) {
+                                boolean removedHash = hashStore.remove(key) != null;
+                                if (removedStr || removedList || removedHash) {
                                     deletedCount++;
                                 }
                             }
@@ -170,11 +178,12 @@ public class Server {
                             if (isExpired(key)) {
                                 listStore.remove(key);
                                 store.remove(key);
+                                hashStore.remove(key);
                                 expiryStore.remove(key);
                             }
                             Deque<String> list = listStore.computeIfAbsent(key, k -> new ArrayDeque<>());
                             for (int i = 2; i < parts.length; i++) {
-                                list.addLast(parts[i]); // Standard append to tail
+                                list.addLast(parts[i]);
                             }
                             writer.println(":" + list.size());
                         } else {
@@ -188,11 +197,12 @@ public class Server {
                             if (isExpired(key)) {
                                 listStore.remove(key);
                                 store.remove(key);
+                                hashStore.remove(key);
                                 expiryStore.remove(key);
                             }
                             Deque<String> list = listStore.computeIfAbsent(key, k -> new ArrayDeque<>());
                             for (int i = 2; i < parts.length; i++) {
-                                list.addFirst(parts[i]); // Push to head
+                                list.addFirst(parts[i]);
                             }
                             writer.println(":" + list.size());
                         } else {
@@ -245,6 +255,75 @@ public class Server {
                             }
                         } else {
                             writer.println("-ERR wrong number of arguments for 'RPOP'");
+                        }
+                        break;
+
+                    case "HSET":
+                        if (parts.length >= 4) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                hashStore.remove(key);
+                                store.remove(key);
+                                expiryStore.remove(key);
+                            }
+                            ConcurrentHashMap<String, String> map = hashStore.computeIfAbsent(key, k -> new ConcurrentHashMap<>());
+                            int fieldsAdded = 0;
+                            // Loop over pairs: HSET key field1 val1 field2 val2...
+                            for (int i = 2; i < parts.length - 1; i += 2) {
+                                String field = parts[i];
+                                String val = parts[i + 1];
+                                if (!map.containsKey(field)) {
+                                    fieldsAdded++;
+                                }
+                                map.put(field, val);
+                            }
+                            writer.println(":" + fieldsAdded);
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'HSET'");
+                        }
+                        break;
+
+                    case "HGET":
+                        if (parts.length >= 3) {
+                            String key = parts[1];
+                            String field = parts[2];
+                            if (isExpired(key)) {
+                                hashStore.remove(key);
+                                expiryStore.remove(key);
+                                writer.println("(nil)");
+                                break;
+                            }
+                            ConcurrentHashMap<String, String> map = hashStore.get(key);
+                            if (map == null || !map.containsKey(field)) {
+                                writer.println("(nil)");
+                            } else {
+                                writer.println(map.get(field));
+                            }
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'HGET'");
+                        }
+                        break;
+
+                    case "HGETALL":
+                        if (parts.length >= 2) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                hashStore.remove(key);
+                                expiryStore.remove(key);
+                                writer.println("(empty list or set)");
+                                break;
+                            }
+                            ConcurrentHashMap<String, String> map = hashStore.get(key);
+                            if (map == null || map.isEmpty()) {
+                                writer.println("(empty list or set)");
+                            } else {
+                                for (Map.Entry<String, String> entry : map.entrySet()) {
+                                    writer.println(entry.getKey());
+                                    writer.println(entry.getValue());
+                                }
+                            }
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'HGETALL'");
                         }
                         break;
 
