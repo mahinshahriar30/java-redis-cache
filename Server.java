@@ -107,7 +107,6 @@ public class Server {
                     case "EXISTS":
                         if (parts.length >= 2) {
                             int count = 0;
-                            // Loop through all keys provided in the command
                             for (int i = 1; i < parts.length; i++) {
                                 String key = parts[i];
                                 if (isExpired(key)) {
@@ -126,7 +125,6 @@ public class Server {
                     case "DEL":
                         if (parts.length >= 2) {
                             int deletedCount = 0;
-                            // Loop through all keys provided and delete each one
                             for (int i = 1; i < parts.length; i++) {
                                 String key = parts[i];
                                 expiryStore.remove(key);
@@ -140,6 +138,22 @@ public class Server {
                         }
                         break;
 
+                    case "INCR":
+                        if (parts.length >= 2) {
+                            handleIncrement(writer, parts[1], 1);
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'INCR'");
+                        }
+                        break;
+
+                    case "DECR":
+                        if (parts.length >= 2) {
+                            handleIncrement(writer, parts[1], -1);
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'DECR'");
+                        }
+                        break;
+
                     default:
                         writer.println("-ERR unknown command '" + command + "'");
                         break;
@@ -148,6 +162,30 @@ public class Server {
         } catch (IOException e) {
             System.out.println("Client disconnected.");
         }
+    }
+
+    // Helper method to handle both INCR (+1) and DECR (-1) logic
+    private static void handleIncrement(PrintWriter writer, String key, long delta) {
+        if (isExpired(key)) {
+            store.remove(key);
+            expiryStore.remove(key);
+        }
+
+        String currentVal = store.get(key);
+        long num = 0;
+
+        if (currentVal != null) {
+            try {
+                num = Long.parseLong(currentVal);
+            } catch (NumberFormatException e) {
+                writer.println("-ERR value is not an integer or out of range");
+                return;
+            }
+        }
+
+        num += delta;
+        store.put(key, String.valueOf(num));
+        writer.println(":" + num);
     }
 
     private static boolean isExpired(String key) {
