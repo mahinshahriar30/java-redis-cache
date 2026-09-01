@@ -4,6 +4,8 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -12,9 +14,11 @@ import java.util.concurrent.TimeUnit;
 public class Server {
     private static final int PORT = 6379;
 
-    // Key-Value Store (RAM)
+    // Key-Value Store for Strings
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-    // Expiration Store (Maps Key -> Expiration Timestamp in milliseconds)
+    // Key-Value Store for Lists
+    private static final ConcurrentHashMap<String, Deque<String>> listStore = new ConcurrentHashMap<>();
+    // Expiration Store
     private static final ConcurrentHashMap<String, Long> expiryStore = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
@@ -41,6 +45,7 @@ public class Server {
                 Long expireAt = expiryStore.get(key);
                 if (expireAt != null && now > expireAt) {
                     store.remove(key);
+                    listStore.remove(key);
                     expiryStore.remove(key);
                     System.out.println("Active Eviction: Automatically cleaned up expired key -> " + key);
                 }
@@ -68,6 +73,7 @@ public class Server {
                         if (parts.length >= 3) {
                             String key = parts[1];
                             String value = parts[2];
+                            listStore.remove(key);
                             store.put(key, value);
 
                             if (parts.length >= 5 && parts[3].equalsIgnoreCase("EX")) {
@@ -93,6 +99,7 @@ public class Server {
                             String key = parts[1];
                             if (isExpired(key)) {
                                 store.remove(key);
+                                listStore.remove(key);
                                 expiryStore.remove(key);
                                 writer.println("(nil)");
                             } else {
@@ -111,8 +118,9 @@ public class Server {
                                 String key = parts[i];
                                 if (isExpired(key)) {
                                     store.remove(key);
+                                    listStore.remove(key);
                                     expiryStore.remove(key);
-                                } else if (store.containsKey(key)) {
+                                } else if (store.containsKey(key) || listStore.containsKey(key)) {
                                     count++;
                                 }
                             }
@@ -128,7 +136,9 @@ public class Server {
                             for (int i = 1; i < parts.length; i++) {
                                 String key = parts[i];
                                 expiryStore.remove(key);
-                                if (store.remove(key) != null) {
+                                boolean removedStr = store.remove(key) != null;
+                                boolean removedList = listStore.remove(key) != null;
+                                if (removedStr || removedList) {
                                     deletedCount++;
                                 }
                             }
@@ -154,6 +164,90 @@ public class Server {
                         }
                         break;
 
+                    case "RPUSH":
+                        if (parts.length >= 3) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                listStore.remove(key);
+                                store.remove(key);
+                                expiryStore.remove(key);
+                            }
+                            Deque<String> list = listStore.computeIfAbsent(key, k -> new ArrayDeque<>());
+                            for (int i = 2; i < parts.length; i++) {
+                                list.addLast(parts[i]); // Standard append to tail
+                            }
+                            writer.println(":" + list.size());
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'RPUSH'");
+                        }
+                        break;
+
+                    case "LPUSH":
+                        if (parts.length >= 3) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                listStore.remove(key);
+                                store.remove(key);
+                                expiryStore.remove(key);
+                            }
+                            Deque<String> list = listStore.computeIfAbsent(key, k -> new ArrayDeque<>());
+                            for (int i = 2; i < parts.length; i++) {
+                                list.addFirst(parts[i]); // Push to head
+                            }
+                            writer.println(":" + list.size());
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'LPUSH'");
+                        }
+                        break;
+
+                    case "LPOP":
+                        if (parts.length >= 2) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                listStore.remove(key);
+                                expiryStore.remove(key);
+                                writer.println("(nil)");
+                                break;
+                            }
+                            Deque<String> list = listStore.get(key);
+                            if (list == null || list.isEmpty()) {
+                                writer.println("(nil)");
+                            } else {
+                                String popped = list.pollFirst();
+                                if (list.isEmpty()) {
+                                    listStore.remove(key);
+                                }
+                                writer.println(popped);
+                            }
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'LPOP'");
+                        }
+                        break;
+
+                    case "RPOP":
+                        if (parts.length >= 2) {
+                            String key = parts[1];
+                            if (isExpired(key)) {
+                                listStore.remove(key);
+                                expiryStore.remove(key);
+                                writer.println("(nil)");
+                                break;
+                            }
+                            Deque<String> list = listStore.get(key);
+                            if (list == null || list.isEmpty()) {
+                                writer.println("(nil)");
+                            } else {
+                                String popped = list.pollLast();
+                                if (list.isEmpty()) {
+                                    listStore.remove(key);
+                                }
+                                writer.println(popped);
+                            }
+                        } else {
+                            writer.println("-ERR wrong number of arguments for 'RPOP'");
+                        }
+                        break;
+
                     default:
                         writer.println("-ERR unknown command '" + command + "'");
                         break;
@@ -164,7 +258,6 @@ public class Server {
         }
     }
 
-    // Helper method to handle both INCR (+1) and DECR (-1) logic
     private static void handleIncrement(PrintWriter writer, String key, long delta) {
         if (isExpired(key)) {
             store.remove(key);
