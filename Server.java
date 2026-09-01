@@ -5,7 +5,9 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -15,13 +17,9 @@ import java.util.concurrent.TimeUnit;
 public class Server {
     private static final int PORT = 6379;
 
-    // Key-Value Store for Strings
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-    // Key-Value Store for Lists
     private static final ConcurrentHashMap<String, Deque<String>> listStore = new ConcurrentHashMap<>();
-    // Key-Value Store for Hashes (Key -> Map of Fields and Values)
     private static final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> hashStore = new ConcurrentHashMap<>();
-    // Expiration Store
     private static final ConcurrentHashMap<String, Long> expiryStore = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
@@ -62,10 +60,20 @@ public class Server {
             BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
             PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)
         ) {
-            String inputLine;
-            while ((inputLine = reader.readLine()) != null) {
-                System.out.println("Received: " + inputLine);
-                String[] parts = inputLine.trim().split("\\s+");
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts;
+
+                // Handle RESP Array format starting with '*'
+                if (line.startsWith("*")) {
+                    parts = parseRESPArray(reader, line);
+                    if (parts == null || parts.length == 0) continue;
+                } else {
+                    // Fallback to inline plain-text commands
+                    parts = line.trim().split("\\s+");
+                }
+
+                if (parts.length == 0 || parts[0].isEmpty()) continue;
                 String command = parts[0].toUpperCase();
 
                 switch (command) {
@@ -268,7 +276,6 @@ public class Server {
                             }
                             ConcurrentHashMap<String, String> map = hashStore.computeIfAbsent(key, k -> new ConcurrentHashMap<>());
                             int fieldsAdded = 0;
-                            // Loop over pairs: HSET key field1 val1 field2 val2...
                             for (int i = 2; i < parts.length - 1; i += 2) {
                                 String field = parts[i];
                                 String val = parts[i + 1];
@@ -334,6 +341,27 @@ public class Server {
             }
         } catch (IOException e) {
             System.out.println("Client disconnected.");
+        }
+    }
+
+    // Parses RESP Array protocol (*count\r\n$len\r\nval\r\n...)
+    private static String[] parseRESPArray(BufferedReader reader, String firstLine) throws IOException {
+        try {
+            int numElements = Integer.parseInt(firstLine.substring(1).trim());
+            List<String> commandParts = new ArrayList<>();
+
+            for (int i = 0; i < numElements; i++) {
+                String lengthLine = reader.readLine(); // Expecting $length
+                if (lengthLine == null || !lengthLine.startsWith("$")) return null;
+
+                String valueLine = reader.readLine();  // Expecting actual string
+                if (valueLine == null) return null;
+
+                commandParts.add(valueLine);
+            }
+            return commandParts.toArray(new String[0]);
+        } catch (Exception e) {
+            return null;
         }
     }
 
