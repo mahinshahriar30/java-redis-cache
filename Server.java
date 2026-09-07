@@ -26,11 +26,19 @@ public class Server {
                 @Override
                 public void handle(HttpExchange exchange) throws IOException {
                     String response = "{\"status\": \"online\", \"server\": \"Custom Java Redis Engine\", \"tcp_port\": 6379}";
+                    byte[] responseBytes = response.getBytes();
+
                     exchange.getResponseHeaders().set("Content-Type", "application/json");
-                    exchange.sendResponseHeaders(200, response.length());
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(response.getBytes());
-                    os.close();
+
+                    if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+                        exchange.sendResponseHeaders(200, -1);
+                        exchange.getResponseBody().close();
+                    } else {
+                        exchange.sendResponseHeaders(200, responseBytes.length);
+                        OutputStream os = exchange.getResponseBody();
+                        os.write(responseBytes);
+                        os.close();
+                    }
                 }
             });
             server.setExecutor(null);
@@ -46,7 +54,6 @@ public class Server {
             System.out.println("Redis RESP TCP Server listening on port " + REDIS_PORT + "...");
             while (true) {
                 Socket clientSocket = serverSocket.accept();
-                // Handle incoming TCP Redis connections
                 new Thread(() -> handleClient(clientSocket)).start();
             }
         } catch (IOException e) {
